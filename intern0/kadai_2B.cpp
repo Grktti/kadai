@@ -9,6 +9,7 @@ class Ball {
 public:
     float x, y;   // 位置
     float vx, vy; // 速度
+    float r = 10.0f;
 
     Ball(float _x, float _y, float _vx, float _vy)
         : x(_x), y(_y), vx(_vx), vy(_vy) {}
@@ -26,7 +27,6 @@ public:
         glBegin(GL_TRIANGLE_FAN);
         glVertex2f(x, y); // 中心
         int segments = 20;
-        float r = 10.0f;
         for (int i = 0; i <= segments; i++) {
             float theta = 2 * M_PI * i / segments;
             glVertex2f(x + r * cos(theta), y + r * sin(theta));
