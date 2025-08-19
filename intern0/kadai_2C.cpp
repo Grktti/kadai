@@ -74,7 +74,7 @@ public:
         }
 
 
-        Vec2 u_ran = randomForce(30.f);  // strength=10
+        Vec2 u_ran = randomForce(30.f)* k_ran_;  // strength=30
 
 
         // --- 壁：やわらかバネで内側へ ---
@@ -89,6 +89,7 @@ public:
 
         // --- マスダンパ系から加速度を計算： a = (F - D v)/M ---
         a_ = (F_boids - v_ * D_) * (1.0f / M_);
+        clipAce(a_, Amax_);
 
         // --- 半陰的オイラー（安定）： v ← v + a dt, p ← p + v dt ---
         v_ += a_ * dt;
@@ -121,14 +122,14 @@ private:
     float D_ = 1.0f;   // 粘性係数（減衰）
 
     // Boids ゲイン
-    float k_sep_  = 3.f;
-    float k_ali_  = 2.f;
+    float k_sep_  = 4.f;
+    float k_ali_  = 10.f;
     float k_coh_  = 2.f;
     float k_wall_ = 2.f;
-    float k_ran_ = 5.f;
+    float k_ran_ = 10.f;
 
     // 制限
-    float Vmax_ = 150.f;
+    float Vmax_ = 100.f;
     float Amax_ = 100.f;
 
     static void clipVec(Vec2& v, float vmax){
