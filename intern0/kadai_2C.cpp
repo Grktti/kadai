@@ -129,7 +129,7 @@ private:
     float k_ran_ = 10.f;
 
     // 制限
-    float Vmax_ = 150.f;
+    float Vmax_ = 100.f;
     float Amax_ = 100.f;
 
     static void clipVec(Vec2& v, float vmax){
