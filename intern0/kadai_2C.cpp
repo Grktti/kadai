@@ -123,7 +123,7 @@ private:
 
     // Boids ゲイン
     float k_sep_  = 4.f;
-    float k_ali_  = 6.f;
+    float k_ali_  = 10.f;
     float k_coh_  = 2.f;
     float k_wall_ = 2.f;
     float k_ran_ = 10.f;
