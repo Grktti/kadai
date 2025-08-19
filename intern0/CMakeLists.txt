@@ -21,3 +21,5 @@ if (WIN32)
         target_link_libraries(${tgt} PRIVATE ${OPENGL_LIBRARIES} glfw3)
     endforeach()
 endif()
+
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

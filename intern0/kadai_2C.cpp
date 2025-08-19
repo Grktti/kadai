@@ -1,16 +1,18 @@
-//
-// Created by rikuo on 25/08/18.
-//
+// ------------------------------------------------------------
+// Boids with mass-damper (no external input u)
+// Agent: a->v->p integrate, Renderer: draw, main: loop
+// ------------------------------------------------------------
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <cmath>
 #include <chrono>
 #include <thread>
 #include <cstdlib>
+#include <ctime>
 
 constexpr float PI = 3.1415926535f;
 
-//演算子オーバーロード用
+// -------- Vec2 & helpers --------
 struct Vec2 {
     float x{0}, y{0};
     Vec2() = default;
@@ -25,18 +27,30 @@ static inline float dot(const Vec2&a,const Vec2&b){ return a.x*b.x + a.y*b.y; }
 static inline float norm(const Vec2&a){ return std::sqrt(dot(a,a)); }
 static inline Vec2  normalize(const Vec2&a){ float n=norm(a); return (n>1e-6f)? a*(1.0f/n):Vec2{}; }
 
+// ============================================================
+// ① Agent：物理特性 + Boids（自前の加速度 a_ を保持）
+// ============================================================
 class Agent {
 public:
-    // コンストラクタ：位置・速度・半径・視野半径を注入
     Agent(const Vec2& p0, const Vec2& v0, float radius, float viewRadius)
         : p_(p0), v_(v0), radius_(radius), viewRad_(viewRadius) {}
 
-    // 物理更新：Boids（分離・整列・凝集）+ 壁 + ダンパ
-    void drive(float dt, const std::vector<Agent>& all, float W, float H) {
-        Vec2 F{0,0};
+    Vec2 randomForce(float strength) {
+        float ang = ((float)std::rand() / RAND_MAX) * 2.f * PI;
+        return Vec2{ std::cos(ang), std::sin(ang) } * strength;
+    }
+
+    // マスダンパ系： M a + D v = F_boids + F_wall
+    void drive(float dt, const std::vector<Agent>& all, float worldW, float worldH)
+    {
+        Vec2 u_s{0,0};
+        Vec2 u_c{0,0};
+        Vec2 u_a{0,0};
+        Vec2 u_wall{0,0};
+
+        // --- Boids: 近傍統計 ---
         Vec2 v_avg{0,0}, p_avg{0,0};
         int cnt = 0;
-
         for (const auto& o : all) {
             if (&o == this) continue;
             Vec2 rij = o.p_ - p_;
@@ -44,8 +58,8 @@ public:
             if (d < viewRad_) {
                 if (d > 1e-4f) {
                     float overlap = viewRad_ - d;
-                    // 分離は“相手と逆向き”へ（反発）
-                    F -= normalize(rij) * (k_sep_ * overlap / (d + 1e-3f));
+                    // 分離（反発）：相手と逆向き
+                    u_s -= normalize(rij) * (k_sep_ * overlap / (d + 1e-3f));
                 }
                 v_avg += o.v_;
                 p_avg += o.p_;
@@ -55,142 +69,177 @@ public:
         if (cnt > 0) {
             v_avg = v_avg * (1.0f/cnt);
             p_avg = p_avg * (1.0f/cnt);
-            F += (v_avg - v_) * k_ali_;  // 整列
-            F += (p_avg - p_) * k_coh_;  // 凝集
+            u_a += (v_avg - v_) * k_ali_;   // 整列
+            u_c += (p_avg - p_) * k_coh_;   // 凝集
         }
 
-        // 壁（ソフトバネ）
-        const float margin = 30.f;
-        if (p_.x < margin)      F.x += k_wall_ * (margin - p_.x);
-        if (p_.x > W - margin)  F.x -= k_wall_ * (p_.x - (W - margin));
-        if (p_.y < margin)      F.y += k_wall_ * (margin - p_.y);
-        if (p_.y > H - margin)  F.y -= k_wall_ * (p_.y - (H - margin));
 
-        // ダンパ
-        F += v_ * (-c_);
+        Vec2 u_ran = randomForce(30.f);  // strength=10
 
-        // クリップ & 半陰的オイラー
-        clipVec(F, Fmax_);
-        v_ = v_ + F * (dt / m_);
+
+        // --- 壁：やわらかバネで内側へ ---
+        const float margin = 10.f;
+        if (p_.x < margin)        u_wall.x += k_wall_ * (margin - p_.x);
+        if (p_.x > worldW-margin) u_wall.x -= k_wall_ * (p_.x - (worldW-margin));
+        if (p_.y < margin)        u_wall.y += k_wall_ * (margin - p_.y);
+        if (p_.y > worldH-margin) u_wall.y -= k_wall_ * (p_.y - (worldH-margin));
+
+        //要素の合成
+        Vec2 F_boids = u_s + u_a + u_c + u_wall + u_ran;
+
+        // --- マスダンパ系から加速度を計算： a = (F - D v)/M ---
+        a_ = (F_boids - v_ * D_) * (1.0f / M_);
+
+        // --- 半陰的オイラー（安定）： v ← v + a dt, p ← p + v dt ---
+        v_ += a_ * dt;
         clipVec(v_, Vmax_);
-        p_ = p_ + v_ * dt;
+        p_ += v_ * dt;
 
-        // 画面内にクランプ（半径分内側）
+        // --- 画面内にクランプ（半径ぶん内側） ---
         if (p_.x < radius_)   p_.x = radius_;
-        if (p_.x > W-radius_) p_.x = W - radius_;
+        if (p_.x > worldW-radius_) p_.x = worldW - radius_;
         if (p_.y < radius_)   p_.y = radius_;
-        if (p_.y > H-radius_) p_.y = H - radius_;
+        if (p_.y > worldH-radius_) p_.y = worldH - radius_;
     }
 
-    // 描画（副作用なし）
-    void draw() const {
-        glBegin(GL_TRIANGLE_FAN);
-        glVertex2f(p_.x, p_.y);
-        const int seg = 18;
-        for (int i=0; i<=seg; ++i) {
-            float a = 3.f*PI*i/seg;
-            glVertex2f(p_.x + radius_*std::cos(a), p_.y + radius_*std::sin(a));
-        }
-        glEnd();
-    }
-
-    // 必要最小限のゲッター
-    Vec2  pos()      const { return p_; }
-    Vec2  vel()      const { return v_; }
-    float radius()   const { return radius_; }
-    float viewRad()  const { return viewRad_; }
+    // 描画用の読み取り
+    Vec2  pos()     const { return p_; }
+    float radius()  const { return radius_; }
 
 private:
     // 状態
     Vec2  p_{0,0};
     Vec2  v_{0,0};
+    Vec2  a_{0,0};
+
+    // 見た目・近傍
     float radius_{3.f};
     float viewRad_{200.f};
 
-    // 物理パラメータ
-    float m_ = 1.0f;     // 質量
-    float c_ = 1.2f;     // 減衰（ダンパ）
+    // 物理パラメータ（マス・ダンパ）
+    float M_ = 1.0f;   // 質量
+    float D_ = 1.0f;   // 粘性係数（減衰）
 
     // Boids ゲイン
-    float k_sep_  = 5.f;
-    float k_ali_  =  30.f;
-    float k_coh_  =   8.f;
-    float k_wall_ =  5.f;
+    float k_sep_  = 3.f;
+    float k_ali_  = 2.f;
+    float k_coh_  = 2.f;
+    float k_wall_ = 2.f;
+    float k_ran_ = 5.f;
 
     // 制限
-    float Fmax_ = 800.f;
     float Vmax_ = 150.f;
+    float Amax_ = 100.f;
 
     static void clipVec(Vec2& v, float vmax){
-        float n = norm(v);
-        if (n > vmax) v = v * (vmax / (n + 1e-6f));
+        float vn = norm(v);
+        if (vn > vmax) v = v * (vmax / (vn + 1e-6f));
+    }
+    static void clipAce(Vec2& a, float amax){
+        float n = norm(a);
+        if (n > amax) a = a * (amax / (n + 1e-6f));
     }
 };
 
-
-class Flock {
+// ============================================================
+// ② Renderer：GLFW初期化、背景色、エージェント描画
+// ============================================================
+class Renderer {
 public:
-    Flock(int n, int W, int H, float agentRadius, float viewRadius)
+    struct Color3 { float r{1.f}, g{1.f}, b{1.f}; };
+
+    Renderer(int W, int H, const char* title)
         : W_(W), H_(H)
     {
-        agents_.reserve(n);
-        for (int i=0; i<n; ++i) {
-            float x = W * 0.5f;
-            float y = H * 0.5f;
-            float ang = (float)std::rand()/RAND_MAX * 2.f*PI;
-            float spd = 40.f + (std::rand()%60);
-            Vec2 p{x,y};
-            Vec2 v{std::cos(ang)*spd, std::sin(ang)*spd};
-            agents_.emplace_back(p, v, agentRadius, viewRadius);
+        if (!glfwInit()) ok_ = false;
+        window_ = glfwCreateWindow(W_, H_, title, nullptr, nullptr);
+        if (!window_) { glfwTerminate(); ok_ = false; return; }
+        glfwMakeContextCurrent(window_);
+
+        glMatrixMode(GL_PROJECTION); glLoadIdentity();
+        glOrtho(0, W_, H_, 0, -1, 1);
+        glMatrixMode(GL_MODELVIEW);
+
+        setBackground(1.f, 1.f, 1.f);
+    }
+
+    ~Renderer(){ if (window_) glfwDestroyWindow(window_); glfwTerminate(); }
+
+    bool good() const { return ok_; }
+    bool shouldClose() const { return glfwWindowShouldClose(window_); }
+    void setBackground(float r, float g, float b){ bg_ = {r,g,b}; }
+
+    void beginFrame() const { glClearColor(bg_.r, bg_.g, bg_.b, 1.f); glClear(GL_COLOR_BUFFER_BIT); }
+
+    void drawAgent(const Agent& a) const {
+        const Vec2 p = a.pos();
+        const float r = a.radius();
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2f(p.x, p.y);
+        const int seg = 24;
+        for (int i=0; i<=seg; ++i) {
+            float ang = 2.f*PI*i/seg;
+            glVertex2f(p.x + r*std::cos(ang), p.y + r*std::sin(ang));
         }
+        glEnd();
     }
-
-    void step(float dt){
-        const std::vector<Agent> snapshot = agents_;            // 同時刻参照用
-        for (auto& a : agents_) a.drive(dt, snapshot, (float)W_, (float)H_);
-    }
-
-    void render() const {
+    void drawAgents(const std::vector<Agent>& agents) const {
         glColor3f(0.9f, 0.1f, 0.1f);
-        for (const auto& a : agents_) a.draw();
+        for (const auto& a : agents) drawAgent(a);
     }
+    void endFrame() const { glfwSwapBuffers(window_); glfwPollEvents(); }
+
 private:
     int W_, H_;
-    std::vector<Agent> agents_;
+    bool ok_{true};
+    GLFWwindow* window_{nullptr};
+    Color3 bg_{1.f,1.f,1.f};
 };
 
-
+// ============================================================
+// ③ main：サンプリング・台数・領域・ループ
+// ============================================================
 int main(){
-    const int W = 500, H = 500;
-    if(!glfwInit()) return -1;
-    GLFWwindow* win = glfwCreateWindow(W, H, "Boids (Agent class)", nullptr, nullptr);
-    if(!win){ glfwTerminate(); return -1; }
-    glfwMakeContextCurrent(win);
+    const int   W   = 1000;
+    const int   H   = 1000;
+    const int   N   = 10;     // エージェント台数
+    const float R   = 5.f;    // 半径
+    const float VR  = 200.f;  // 視野半径
+    const double dt = 0.01;   // サンプリング [s]（100Hz）
 
-    glMatrixMode(GL_PROJECTION); glLoadIdentity();
-    glOrtho(0, W, H, 0, -1, 1);
-    glMatrixMode(GL_MODELVIEW);
+    std::srand((unsigned)std::time(nullptr));
 
-    // 条件：台数10・視野半径50（Flock 内部）・半径3
-    Flock flock(10, W, H, 3.f, 200.f);
+    Renderer renderer(W, H, "Boids (mass-damper, a->v->p)");
+    if (!renderer.good()) return -1;
+    renderer.setBackground(1.f, 1.f, 1.f);
 
-    const double dt = 0.01; // 100Hz
+    std::vector<Agent> agents;
+    agents.reserve(N);
+    for (int i=0; i<N; ++i){
+        float ang = (float)std::rand()/RAND_MAX * 2.f*PI;
+        float spd = 40.f + (std::rand()%60);
+        agents.emplace_back(
+            Vec2{W*0.5f, H*0.5f},                      // 初期位置＝中心
+            Vec2{std::cos(ang)*spd, std::sin(ang)*spd},// 初期速度
+            R, VR
+        );
+    }
+
     auto next = std::chrono::steady_clock::now();
+    while (!renderer.shouldClose()) {
+        const std::vector<Agent> snap = agents;       // 同時刻参照
 
-    while(!glfwWindowShouldClose(win)){
-        flock.step((float)dt);
+        for (auto& a : agents) {
+            a.drive((float)dt, snap, (float)W, (float)H); // ★uは使わない
+        }
 
-        glClearColor(1,1,1,1);
-        glClear(GL_COLOR_BUFFER_BIT);
-        flock.render();
-
-        glfwSwapBuffers(win);
-        glfwPollEvents();
+        renderer.beginFrame();
+        renderer.drawAgents(agents);
+        renderer.endFrame();
 
         next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(dt));
+                    std::chrono::duration<double>(dt));
         std::this_thread::sleep_until(next);
     }
-    glfwTerminate();
     return 0;
 }
