@@ -36,7 +36,7 @@ public:
 };
 
 int main() {
-    int width = 1000, height = 1000;
+    int width = 500, height = 500;
 
     if (!glfwInit()) return -1;
     GLFWwindow* window = glfwCreateWindow(width, height, "Ball Demo", NULL, NULL);
