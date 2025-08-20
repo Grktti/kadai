@@ -201,8 +201,8 @@ private:
 // ③ main：サンプリング・台数・領域・ループ
 // ============================================================
 int main(){
-    const int   W   = 500;
-    const int   H   = 500;
+    const int   W   = 1000;
+    const int   H   = 1000;
     const int   N   = 10;     // エージェント台数
     const float R   = 5.f;    // 半径
     const float VR  = 200.f;  // 視野半径
